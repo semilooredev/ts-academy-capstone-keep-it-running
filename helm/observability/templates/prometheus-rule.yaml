@@ -1,0 +1,39 @@
+# Multi-window burn-rate alerts for the 99.9% / 30-day availability SLO in
+# docs/SLO.md. Both alerts route to the Slack receiver configured in
+# values.yaml (kube-prometheus-stack.alertmanager.config), which reads the
+# webhook from the mounted slack-webhook Secret file.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: robot-shop-availability
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/part-of: robot-shop-capstone
+spec:
+  groups:
+    - name: robot-shop-availability-burn
+      rules:
+        - alert: RobotShopAvailabilityFastBurn
+          expr: |
+            (1 - avg(avg_over_time(probe_success{job="robot-shop-web-availability"}[1h]))) > 0.0144
+            and
+            (1 - avg(avg_over_time(probe_success{job="robot-shop-web-availability"}[5m]))) > 0.0144
+          for: 2m
+          labels:
+            severity: critical
+            slo: robot-shop-web-availability
+          annotations:
+            summary: "Robot Shop is burning its error budget 14.4x too fast"
+            description: "More than 1.44% of availability probes failed over both the last 1h and 5m. At this rate the 30-day error budget (43.2 minutes) is exhausted in about 2 days. See docs/RUNBOOK.md."
+        - alert: RobotShopAvailabilitySlowBurn
+          expr: |
+            (1 - avg(avg_over_time(probe_success{job="robot-shop-web-availability"}[6h]))) > 0.006
+            and
+            (1 - avg(avg_over_time(probe_success{job="robot-shop-web-availability"}[30m]))) > 0.006
+          for: 15m
+          labels:
+            severity: warning
+            slo: robot-shop-web-availability
+          annotations:
+            summary: "Robot Shop is burning its error budget 6x too fast"
+            description: "More than 0.6% of availability probes failed over both the last 6h and 30m. At this rate the 30-day error budget (43.2 minutes) is exhausted in about 5 days. See docs/RUNBOOK.md."

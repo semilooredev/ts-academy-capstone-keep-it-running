@@ -1,0 +1,97 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: shipping
+  labels:
+    service: shipping
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      service: shipping
+  template:
+    metadata:
+      labels:
+        service: shipping
+    spec:
+      {{ if .Values.psp.enabled }}
+      serviceAccountName: robot-shop
+      {{ end }}
+      {{- if .Values.otel.enabled }}
+      initContainers:
+      - name: otel-javaagent
+        image: {{ .Values.otel.downloaderImage }}
+        imagePullPolicy: IfNotPresent
+        command:
+          - /bin/sh
+          - -c
+          - curl -fsSL -o /otel/opentelemetry-javaagent.jar {{ .Values.otel.javaAgentUrl | quote }}
+        volumeMounts:
+        - name: otel-agent
+          mountPath: /otel
+      {{- end }}
+      containers:
+      - name: shipping
+        image: {{ .Values.image.repo }}/rs-shipping:{{ .Values.image.version }}
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        {{- if .Values.otel.enabled }}
+        env:
+        - name: JAVA_TOOL_OPTIONS
+          value: -javaagent:/otel/opentelemetry-javaagent.jar
+        - name: OTEL_SERVICE_NAME
+          value: shipping
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: {{ .Values.otel.collectorEndpoint | quote }}
+        - name: OTEL_EXPORTER_OTLP_PROTOCOL
+          value: grpc
+        - name: OTEL_TRACES_EXPORTER
+          value: otlp
+        - name: OTEL_METRICS_EXPORTER
+          value: none
+        - name: OTEL_LOGS_EXPORTER
+          value: none
+        - name: OTEL_TRACES_SAMPLER
+          value: parentbased_traceidratio
+        - name: OTEL_TRACES_SAMPLER_ARG
+          value: "1.0"
+        volumeMounts:
+        - name: otel-agent
+          mountPath: /otel
+          readOnly: true
+        {{- end }}
+        ports:
+        - containerPort: 8080
+        # it's Java it needs lots of memory
+        resources:
+          limits:
+            cpu: 200m
+            memory: 1000Mi
+          requests:
+            cpu: 100m
+            memory: 500Mi
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          failureThreshold: 30
+          successThreshold: 1
+      {{- if .Values.otel.enabled }}
+      volumes:
+      - name: otel-agent
+        emptyDir: {}
+      {{- end }}
+      restartPolicy: Always
+      {{- with .Values.shipping.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.shipping.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.shipping.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

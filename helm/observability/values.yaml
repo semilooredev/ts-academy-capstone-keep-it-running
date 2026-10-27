@@ -1,0 +1,385 @@
+# Capstone 2 observability stack.
+# Release name: observability. Namespace: monitoring.
+# The local templates in this chart (dashboard, ServiceMonitors, Probe,
+# PrometheusRule, Blackbox Exporter) are selected by Prometheus because the
+# *NilUsesHelmValues switches below are false: Prometheus discovers every
+# ServiceMonitor / PrometheusRule / Probe in the cluster, not only the ones
+# carrying this release's labels.
+
+kube-prometheus-stack:
+  prometheus:
+    prometheusSpec:
+      retention: 7d
+      serviceMonitorSelectorNilUsesHelmValues: false
+      ruleSelectorNilUsesHelmValues: false
+      probeSelectorNilUsesHelmValues: false
+      resources:
+        requests:
+          cpu: 200m
+          memory: 512Mi
+        limits:
+          cpu: "1"
+          memory: 1Gi
+
+  grafana:
+    enabled: true
+    # Demo-only credentials for the disposable capstone cluster. Change them
+    # before using this stack anywhere else.
+    adminUser: admin
+    adminPassword: capstone-admin
+    persistence:
+      enabled: false
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+    sidecar:
+      dashboards:
+        enabled: true
+        label: grafana_dashboard
+        labelValue: "1"
+        searchNamespace: monitoring
+        provider:
+          allowUiUpdates: true
+      datasources:
+        enabled: true
+        defaultDatasourceEnabled: true
+    # Loki and Jaeger appear beside the default Prometheus datasource.
+    # Service names are the ones rendered by this same umbrella release:
+    #   loki   -> observability-loki:3100
+    #   jaeger -> observability-jaeger-query:16686
+    additionalDataSources:
+      - name: Loki
+        type: loki
+        uid: loki
+        url: http://observability-loki:3100
+        access: proxy
+        isDefault: false
+        editable: true
+      - name: Jaeger
+        type: jaeger
+        uid: jaeger
+        url: http://observability-jaeger-query:16686
+        access: proxy
+        isDefault: false
+        editable: true
+
+  alertmanager:
+    enabled: true
+    alertmanagerSpec:
+      # Jeff creates this Secret (JEFF-ACTIONS.md step C2-4). It is mounted
+      # at /etc/alertmanager/secrets/slack-webhook/webhook-url and referenced
+      # by api_url_file below, so the webhook itself is never committed.
+      secrets:
+        - slack-webhook
+      resources:
+        requests:
+          cpu: 50m
+          memory: 64Mi
+        limits:
+          cpu: 250m
+          memory: 256Mi
+    config:
+      global:
+        resolve_timeout: 5m
+      route:
+        group_by: ["alertname", "namespace"]
+        group_wait: 30s
+        group_interval: 5m
+        repeat_interval: 4h
+        receiver: slack-alerts
+      receivers:
+        # kube-prometheus-stack merges its default Watchdog route into this
+        # config; that route points at the "null" receiver, so it must stay
+        # defined here or Alertmanager rejects the whole config.
+        - name: "null"
+        - name: slack-alerts
+          slack_configs:
+            - api_url_file: /etc/alertmanager/secrets/slack-webhook/webhook-url
+              channel: "#alerts"
+              send_resolved: true
+              title: >-
+                [{{ .Status | toUpper }}{{ if eq .Status "firing" }}:{{ .Alerts.Firing | len }}{{ end }}]
+                {{ .CommonLabels.alertname }} - Robot Shop capstone
+              text: >-
+                {{ range .Alerts }}*Alert:* {{ .Annotations.summary }}
+                *Description:* {{ .Annotations.description }}
+                *Severity:* {{ .Labels.severity }}
+                {{ end }}
+
+  nodeExporter:
+    enabled: true
+  kubeStateMetrics:
+    enabled: true
+
+# Loki in SingleBinary mode with local filesystem storage: deliberately
+# small and disposable, sized for a coursework cluster rather than HA.
+loki:
+  lokiCanary:
+    enabled: false
+  # The chart's validation fails if its helm-test is enabled while the
+  # canary is off - disable both.
+  test:
+    enabled: false
+  deploymentMode: SingleBinary
+  singleBinary:
+    replicas: 1
+    persistence:
+      enabled: true
+      size: 10Gi
+      storageClass: null
+  read:
+    replicas: 0
+  write:
+    replicas: 0
+  backend:
+    replicas: 0
+  gateway:
+    enabled: false
+  chunksCache:
+    enabled: false
+  resultsCache:
+    enabled: false
+  loki:
+    auth_enabled: false
+    commonConfig:
+      path_prefix: /var/loki
+      replication_factor: 1
+    storage:
+      type: filesystem
+    schemaConfig:
+      configs:
+        - from: 2024-04-01
+          store: tsdb
+          object_store: filesystem
+          schema: v13
+          index:
+            prefix: index_
+            period: 24h
+    limits_config:
+      reject_old_samples: true
+      reject_old_samples_max_age: 168h
+      max_cache_freshness_per_query: 10m
+      split_queries_by_interval: 15m
+      query_timeout: 300s
+      volume_enabled: true
+
+# Fluent Bit DaemonSet: tails Kubernetes container logs, enriches them with
+# Kubernetes metadata, and ships them to Loki.
+fluent-bit:
+  daemonSet:
+    enabled: true
+  deployment:
+    enabled: false
+  serviceMonitor:
+    enabled: false
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+  config:
+    service: |
+      [SERVICE]
+          Daemon Off
+          Flush {{ .Values.flush }}
+          Log_Level {{ .Values.logLevel }}
+          Parsers_File /fluent-bit/etc/parsers.conf
+          Parsers_File /fluent-bit/etc/conf/custom_parsers.conf
+          HTTP_Server On
+          HTTP_Listen 0.0.0.0
+          HTTP_Port {{ .Values.metricsPort }}
+          Health_Check On
+    inputs: |
+      [INPUT]
+          Name tail
+          Path /var/log/containers/*.log
+          multiline.parser docker, cri
+          Tag kube.*
+          DB /var/log/flb_kube.db
+          Mem_Buf_Limit 5MB
+          Skip_Long_Lines On
+          Refresh_Interval 5
+    filters: |
+      [FILTER]
+          Name kubernetes
+          Match kube.*
+          Merge_Log On
+          Keep_Log Off
+          Merge_Log_Key log_processed
+          K8S-Logging.Parser On
+          K8S-Logging.Exclude On
+
+      [FILTER]
+          Name modify
+          Match kube.*
+          Add capstone keep-it-running
+    outputs: |
+      [OUTPUT]
+          Name loki
+          Match kube.*
+          Host observability-loki
+          Port 3100
+          URI /loki/api/v1/push
+          Labels job=kubernetes,namespace=$kubernetes['namespace_name'],pod=$kubernetes['pod_name'],container=$kubernetes['container_name'],service=$kubernetes['labels']['service']
+          Line_Format json
+          Log_Level info
+    customParsers: |
+      [PARSER]
+          Name docker_no_time
+          Format json
+          Time_Keep Off
+          Time_Key time
+          Time_Format %Y-%m-%dT%H:%M:%S.%L
+
+# Jaeger all-in-one with in-memory storage: traces survive until the pod
+# restarts, which is enough for the brief's "produce one trace" evidence.
+jaeger:
+  provisionDataStore:
+    cassandra: false
+    elasticsearch: false
+    kafka: false
+  storage:
+    type: memory
+  allInOne:
+    enabled: true
+    args:
+      - --collector.otlp.enabled=true
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+  collector:
+    enabled: false
+  query:
+    enabled: false
+  agent:
+    enabled: false
+
+# OpenTelemetry Collector (contrib distribution, needed for spanmetrics).
+# alternateConfig replaces the subchart config wholesale; Helm cannot remove
+# default subchart config keys by merging, so `config` is not used here.
+opentelemetry-collector:
+  mode: deployment
+  replicaCount: 1
+  image:
+    repository: otel/opentelemetry-collector-contrib
+    tag: "0.108.0"
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  ports:
+    otlp:
+      enabled: true
+      containerPort: 4317
+      servicePort: 4317
+      protocol: TCP
+      appProtocol: grpc
+    otlp-http:
+      enabled: true
+      containerPort: 4318
+      servicePort: 4318
+      protocol: TCP
+    jaeger-compact:
+      enabled: false
+    jaeger-thrift:
+      enabled: false
+    jaeger-grpc:
+      enabled: false
+    zipkin:
+      enabled: false
+    metrics:
+      enabled: true
+      containerPort: 8888
+      servicePort: 8888
+      protocol: TCP
+    spanmetrics:
+      enabled: true
+      containerPort: 8889
+      servicePort: 8889
+      protocol: TCP
+  alternateConfig:
+    extensions:
+      health_check:
+        endpoint: ${env:MY_POD_IP}:13133
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: ${env:MY_POD_IP}:4317
+          http:
+            endpoint: ${env:MY_POD_IP}:4318
+    processors:
+      memory_limiter:
+        check_interval: 5s
+        limit_percentage: 80
+        spike_limit_percentage: 25
+      batch:
+        send_batch_size: 1000
+        timeout: 10s
+      resource:
+        attributes:
+          - key: deployment.environment
+            value: capstone
+            action: upsert
+    connectors:
+      spanmetrics:
+        namespace: ""
+        histogram:
+          explicit:
+            buckets: [10ms, 25ms, 50ms, 100ms, 250ms, 500ms, 1s, 2.5s, 5s, 10s]
+        dimensions:
+          - name: http.method
+          - name: http.status_code
+        exemplars:
+          enabled: false
+        metrics_flush_interval: 15s
+    exporters:
+      otlp/jaeger:
+        endpoint: observability-jaeger-collector.monitoring.svc.cluster.local:4317
+        tls:
+          insecure: true
+      prometheus/spanmetrics:
+        endpoint: ${env:MY_POD_IP}:8889
+        namespace: ""
+        send_timestamps: true
+        metric_expiration: 180h
+        enable_open_metrics: true
+    service:
+      extensions: [health_check]
+      telemetry:
+        metrics:
+          address: ${env:MY_POD_IP}:8888
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, resource, batch]
+          exporters: [otlp/jaeger, spanmetrics]
+        metrics:
+          receivers: [spanmetrics]
+          processors: [memory_limiter, batch]
+          exporters: [prometheus/spanmetrics]
+
+# Local template settings (templates/blackbox-exporter.yaml).
+blackboxExporter:
+  image: prom/blackbox-exporter:v0.25.0
+  resources:
+    requests:
+      cpu: 25m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 128Mi

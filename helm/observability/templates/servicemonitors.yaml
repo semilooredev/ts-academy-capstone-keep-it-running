@@ -1,0 +1,49 @@
+# Scrape the NGINX exporter sidecar added to Robot Shop's web pods by the
+# vendored chart in ../robot-shop (values-capstone.yaml: metrics.nginxExporter).
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: robot-shop-web
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/part-of: robot-shop-capstone
+spec:
+  namespaceSelector:
+    matchNames:
+      - robot-shop
+  selector:
+    matchLabels:
+      service: web
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 30s
+---
+# Scrape the spanmetrics Prometheus exporter on the OpenTelemetry Collector.
+# This is where the request-rate / error / latency series used by the
+# Grafana dashboard come from.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: otel-collector-spanmetrics
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/part-of: robot-shop-capstone
+spec:
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  selector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values:
+          - opentelemetry-collector
+      - key: app.kubernetes.io/instance
+        operator: In
+        values:
+          - {{ .Release.Name }}
+  endpoints:
+    - port: spanmetrics
+      path: /metrics
+      interval: 30s

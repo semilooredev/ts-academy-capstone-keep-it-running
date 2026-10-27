@@ -1,0 +1,9 @@
+# Observability chart dependencies are vendored by `helm dependency update`
+# (Chart.lock pins the exact versions). The downloaded tarballs are build
+# artifacts, not source.
+helm/observability/charts/
+helm/robot-shop/charts/
+
+# Editor / OS noise
+.DS_Store
+*.swp

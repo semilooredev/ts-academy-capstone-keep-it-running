@@ -1,0 +1,9 @@
+# kind-cluster overrides for Robot Shop - layer AFTER values-capstone.yaml:
+#   helm upgrade --install robot-shop ../robot-shop \
+#     -f ../robot-shop/values-capstone.yaml \
+#     -f ../robot-shop/values-kind.yaml
+# kind's local-path provisioner is the cluster default StorageClass and is
+# named "standard" - the EKS-oriented gp3 class in values-capstone.yaml
+# does not exist here, and the Redis PVC would stay Pending without this.
+redis:
+  storageClassName: standard

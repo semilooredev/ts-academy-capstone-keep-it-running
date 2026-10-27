@@ -1,0 +1,93 @@
+# VM profile for THIS agent VM (2 CPU, 8 GB RAM shared with the platform,
+# ~7.4 GB disk). Layered last when installing the observability stack here:
+#   helm upgrade --install observability . -f values-laptop.yaml -f values-vm.yaml
+# (values-laptop already drops node-exporter / kube-state-metrics and shrinks
+# requests; this file goes further for the VM's hard disk/RAM ceilings.)
+# NOT for Jeff's laptop - his profile is values-laptop.yaml alone.
+kube-prometheus-stack:
+  prometheus:
+    prometheusSpec:
+      retention: 12h
+      resources:
+        requests:
+          cpu: 50m
+          memory: 192Mi
+        limits:
+          cpu: 500m
+          memory: 448Mi
+    # No TSDB volume claim on the VM - emptyDir via disabled storageSpec
+    # is the kube-prometheus-stack default when storageSpec is empty.
+  grafana:
+    resources:
+      requests:
+        cpu: 25m
+        memory: 64Mi
+      limits:
+        cpu: 250m
+        memory: 192Mi
+  alertmanager:
+    alertmanagerSpec:
+      resources:
+        requests:
+          cpu: 25m
+          memory: 48Mi
+        limits:
+          cpu: 100m
+          memory: 128Mi
+  prometheusOperator:
+    resources:
+      requests:
+        cpu: 25m
+        memory: 64Mi
+      limits:
+        cpu: 200m
+        memory: 192Mi
+
+loki:
+  singleBinary:
+    persistence:
+      size: 2Gi
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: 250m
+        memory: 256Mi
+
+fluent-bit:
+  resources:
+    requests:
+      cpu: 25m
+      memory: 48Mi
+    limits:
+      cpu: 100m
+      memory: 128Mi
+
+jaeger:
+  allInOne:
+    resources:
+      requests:
+        cpu: 25m
+        memory: 64Mi
+      limits:
+        cpu: 250m
+        memory: 192Mi
+
+opentelemetry-collector:
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 192Mi
+
+blackboxExporter:
+  resources:
+    requests:
+      cpu: 10m
+      memory: 24Mi
+    limits:
+      cpu: 100m
+      memory: 64Mi

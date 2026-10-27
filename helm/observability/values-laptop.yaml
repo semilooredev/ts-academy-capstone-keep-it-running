@@ -1,0 +1,59 @@
+# Laptop scale-down values for the observability stack on the kind cluster.
+# Layer AFTER the chart's own values.yaml only if RAM is tight:
+#   helm upgrade --install observability . -f values-laptop.yaml ...
+# Everything functional stays on - Prometheus, Grafana, Alertmanager (Slack),
+# Loki, Fluent Bit, Jaeger, the Collector, Blackbox probe. What changes is
+# footprint: no node-exporter / kube-state-metrics (not needed by the Robot
+# Shop dashboard), shorter Prometheus retention, smaller resource envelopes.
+kube-prometheus-stack:
+  nodeExporter:
+    enabled: false
+  kubeStateMetrics:
+    enabled: false
+  prometheus:
+    prometheusSpec:
+      retention: 2d
+      resources:
+        requests:
+          cpu: 100m
+          memory: 384Mi
+        limits:
+          cpu: 500m
+          memory: 768Mi
+  grafana:
+    resources:
+      requests:
+        cpu: 50m
+        memory: 96Mi
+      limits:
+        cpu: 250m
+        memory: 256Mi
+
+loki:
+  singleBinary:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+
+jaeger:
+  allInOne:
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: 250m
+        memory: 256Mi
+
+opentelemetry-collector:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi

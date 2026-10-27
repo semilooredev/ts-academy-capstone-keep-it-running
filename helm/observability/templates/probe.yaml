@@ -1,0 +1,25 @@
+# Synthetic availability probe for the Robot Shop web entry point.
+# probe_success{job="robot-shop-web-availability"} is the SLI time series
+# used by docs/SLO.md and templates/prometheus-rule.yaml.
+apiVersion: monitoring.coreos.com/v1
+kind: Probe
+metadata:
+  name: robot-shop-web-availability
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/part-of: robot-shop-capstone
+spec:
+  interval: 30s
+  scrapeTimeout: 10s
+  module: http_2xx
+  jobName: robot-shop-web-availability
+  prober:
+    url: blackbox-exporter.{{ .Release.Namespace }}.svc.cluster.local:9115
+    path: /probe
+  targets:
+    staticConfig:
+      static:
+        - http://web.robot-shop.svc.cluster.local:8080/
+      labels:
+        service: web
+        app: robot-shop
